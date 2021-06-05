@@ -27,10 +27,8 @@ class TestSum(unittest.TestCase):
 
 
     def test_ssl_certificate(self):
-
         cli = myhttp.MyHTTPClient("https://morph3sec.com")
-        r = cli.get("/")
-        ssl_cert = cli.get_pretified_ssl_cert() # some form of request must be done before it
+        ssl_cert = cli.get_prettified_ssl_cert() # some form of request must be done before it
         self.assertEqual(ssl_cert["serialNumber"], 310900643139603994721994072218679395285278, "Testing for SSL certificate failed")
 
 

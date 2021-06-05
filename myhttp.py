@@ -21,7 +21,7 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
 class MyHTTPObject:
-    def __init__(self, url, port=-1, path='/',method="GET", protocol=1.1, is_ssl=False, ssl_verify = False, timeout = 10):
+    def __init__(self, url, port=-1, path='/',method="GET", protocol=1.1 ):
         self.url = url
         self.protocols = ["1.0","0.9","0.8","1.1","2","3"] # , users might wanna change this
         self.methods = ["GET","POST","HEAD","PUT", "OPTIONS", "DELETE", "PATCH", "CONNECT","TRACE"]
@@ -33,34 +33,33 @@ class MyHTTPObject:
         self.port = 80 # default ? 
         if(port != -1 ): # user supplied a port, lets use it 
             self.port = port
-        self.is_ssl = is_ssl
         self.parse_url() # sets self.port, self.is_ssl, self.path 
-
         self.protocol = protocol
-        self.timeout = timeout
-        self.ssl_verify = ssl_verify
         self.resp = ""
         self.resp_body = ""
         self.place_holder = "" # ? 
         self.resp_headers = ""
         self.additional_headers = []
         self.body_params = ""
-        self.ssl_cert = None
+        self.request = ""
         pass
 
-    def __str__(self):
-        req =  f"{self.method} {self.path} HTTP/{self.protocol}\r\n"
-        req += f"Host: {self.host_header}\r\n"
-        req += f"User-Agent: {self.user_agent}\r\n"
+    def forge_request(self):
+        self.request =  f"{self.method} {self.path} HTTP/{self.protocol}\r\n"
+        self.request += f"Host: {self.host_header}\r\n"
+        self.request += f"User-Agent: {self.user_agent}\r\n"
         if(len(self.additional_headers) > 0):
             for h in self.additional_headers:
-                req += f"{h}\r\n"
+                self.request += f"{h}\r\n"
         #req += f"Accept: */*\r\n
-        
-        req += "\r\n"
+        self.request += "\r\n"
         if(len(self.body_params)> 0):
-            req += self.body_params
-        return req
+            self.request += self.body_params
+        pass
+
+
+    def __str__(self):
+        return repr(self)
 
     def parse_url(self):
         parsed_url = urlparse(self.url)
@@ -85,58 +84,24 @@ class MyHTTPObject:
         self.hostname = parsed_url.hostname
         pass
     
-    def send(self):
-        # a response object is ready on self.resp after this function gets executed
+    
 
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
-        self.sock.settimeout(self.timeout)
-
-        if self.is_ssl == True:
-            context = ssl.SSLContext(ssl_version = ssl.PROTOCOL_SSLv23 ) # ssl_version must be None ? 
-            if(self.ssl_verify == False):
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-
-            self.ssl_sock = context.wrap_socket(self.sock)
-            self.ssl_sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
-            self.ssl_sock.connect((self.hostname, self.port))
-            self.ssl_sock.send(self.__str__().encode())
-            r = SocketReader(self.ssl_sock)
-            self.resp = HttpStream(r)
-            try:
-                self.resp_body = self.resp.body_file().read().decode('latin1') # ?
-                self.resp_headers = ""
-                for key,val in self.resp.headers().items():
-                    self.resp_headers += f"{key}: {val}\n"
-            except:
-                pass
-            #print(dir(self.resp))
-            self.ssl_cert = ssl.DER_cert_to_PEM_cert(self.ssl_sock.getpeercert(True))
-            self.ssl_sock.close()
-#            self.resp = self.resp.decode()
-        else:
-            self.sock.connect((self.hostname, self.port))
-            self.sock.send(self.__str__().encode())
-            r = SocketReader(self.sock)
-            self.resp = HttpStream(r)
-            try:
-                self.resp_body = self.resp.body_file().read().decode('latin1')
-                self.resp_headers = ""
-                for key,val in self.resp.headers().items():
-                    self.resp_headers += f"{key}: {val}\n"
-            except:
-                pass
-            self.sock.close()
 
 
 class MyHTTPClient(MyHTTPObject):
-    def __init__(self,host, port=-1) -> None:
+    def __init__(self,host, port=-1, ssl_verify=False, timeout = 3) -> None:
         self.http_object = MyHTTPObject(host,port)
+        self.sock = None        
+        self.ssl_cert = None
+        self.ssl_verify = ssl_verify
+        self.timeout = timeout
+
         pass
+
     def get(self,path):
         self.http_object.method = "GET"
         self.http_object.path =  path
-        self.http_object.send()
+        self.send()
         return self.http_object
 
     def post(self,path, data=""):
@@ -147,25 +112,86 @@ class MyHTTPClient(MyHTTPObject):
         self.http_object.additional_headers.append(f"Content-Length: {len(data)}") # data can be 0 
         
         self.http_object.body_params = data
-        self.http_object.send()
+        self.send()
         return self.http_object
     
-    def get_pretified_ssl_cert(self):
+    def send(self):
+        # a response object is ready on self.resp after this function gets executed
+
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+        self.sock.settimeout(self.timeout)
+        self.http_object.forge_request()
+        if self.http_object.is_ssl == True:
+            context = ssl.SSLContext(ssl_version = ssl.PROTOCOL_SSLv23 ) # ssl_version must be None ? 
+            if(self.ssl_verify == False):
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+
+            self.ssl_sock = context.wrap_socket(self.sock, server_hostname=self.http_object.hostname) # For SNI use server_hostname=self.hostname
+            self.ssl_sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
+            self.ssl_sock.connect((self.http_object.hostname, self.http_object.port))
+            self.ssl_sock.send(self.http_object.request.encode())
+            r = SocketReader(self.ssl_sock)
+            self.http_object.resp = HttpStream(r)
+            try:
+                self.http_object.resp_body = self.http_object.resp.body_file().read().decode('latin1') # ?
+                self.http_object.resp_headers = ""
+                for key,val in self.resp.headers().items():
+                    self.http_object.resp_headers += f"{key}: {val}\n"
+            except:
+                pass
+            #print(dir(self.resp))
+            self.ssl_sock.close()
+#            self.resp = self.resp.decode()
+        else:
+            self.sock.connect((self.http_object.hostname, self.http_object.port))
+            self.sock.send(self.http_object.request.encode())
+            r = SocketReader(self.sock)
+            self.http_object.resp = HttpStream(r)
+            try:
+                self.http_object.resp_body = self.http_object.resp.body_file().read().decode('latin1')
+                self.http_object.resp_headers = ""
+                for key,val in self.resp.headers().items():
+                    self.http_object.resp_headers += f"{key}: {val}\n"
+            except:
+                pass
+            self.sock.close()
+
+    def get_ssl_cert(self):
+        
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+        self.sock.settimeout(self.timeout)
+        context = ssl.SSLContext(ssl_version = ssl.PROTOCOL_SSLv23 )
+        if(self.ssl_verify == False):
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+
+        self.ssl_sock = context.wrap_socket(self.sock, server_hostname=self.http_object.hostname) # For SNI use server_hostname=self.hostname
+        self.ssl_sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
+        self.ssl_sock.connect((self.http_object.hostname, self.http_object.port))
+        self.ssl_cert = ssl.DER_cert_to_PEM_cert(self.ssl_sock.getpeercert(True))
+        self.ssl_sock.close()
+        return self.ssl_cert
+
+
+    def get_prettified_ssl_cert(self):
+        if(self.ssl_cert):
+            pass
+        else:
+            self.get_ssl_cert()
         """
         Returns a prettified dict of ssl cert
         """
-        ssl_cert = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, self.http_object.ssl_cert)
+        ssl_cert = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_PEM, self.ssl_cert)
         subjects = {}
         for subject in ssl_cert.get_subject().get_components():
             subjects[subject[0].decode()] =subject[1].decode() 
-
 
         issuers = {}
         for issuer in ssl_cert.get_issuer().get_components():
             issuers[issuer[0].decode()] =issuer[1].decode() 
 
-
-        result = {
+        prettified_cert = {
             'subject': subjects,
             'issuer': issuers,
             'serialNumber': ssl_cert.get_serial_number(),
@@ -176,11 +202,9 @@ class MyHTTPClient(MyHTTPObject):
 
         extensions = (ssl_cert.get_extension(i) for i in range(ssl_cert.get_extension_count()))
         extension_data = {e.get_short_name().decode(): str(e) for e in extensions}
-        result.update(extension_data)
+        prettified_cert.update(extension_data)
         #pprint(result)
-        return result
-
-
+        return prettified_cert
 
 class MyHTTPSession(MyHTTPClient):
     def __init__(self,host,port=-1) -> None:
